@@ -27,15 +27,107 @@ public sealed class CoverProcessor
             return EmptyReport();
         }
 
-        Log($"Папка: {folderPath}");
+        string root = Path.GetFullPath(folderPath);
+        Log($"Корень: {root}");
 
-        IReadOnlyList<string> audioFiles = FindAudioFiles(folderPath);
-        Log($"Аудиофайлов (MP3, FLAC, M4A): {audioFiles.Count}.");
-        if (audioFiles.Count == 0)
+        var folders = new List<string>();
+        CollectFolders(root, folders, Log, new HashSet<string>(StringComparer.OrdinalIgnoreCase), isRoot: true);
+
+        var reports = new List<ProcessingReport>();
+        foreach (string folder in folders)
         {
-            Log("Обработка остановлена: в папке нет подходящих файлов.");
+            ProcessingReport? report = ProcessFolder(root, folder, Log);
+            if (report is not null)
+                reports.Add(report);
+        }
+
+        if (reports.Count == 0)
+        {
+            Log("В выбранной папке и подпапках нет файлов MP3, FLAC или M4A.");
             return EmptyReport();
         }
+
+        if (reports.Count == 1)
+            return reports[0];
+
+        int processed = reports.Sum(report => report.ProcessedCount);
+        int failed = reports.Sum(report => report.FailedCount);
+        Log($"Итог. Папок: {reports.Count}, файлов записано: {processed}, ошибок: {failed}.");
+        return new ProcessingReport
+        {
+            Source = CoverSource.None,
+            AudioFileCount = reports.Sum(report => report.AudioFileCount),
+            ProcessedCount = processed,
+            FailedCount = failed,
+            Errors = reports.SelectMany(report => report.Errors).ToList()
+        };
+    }
+
+    private static void CollectFolders(
+        string folderPath,
+        List<string> folders,
+        Action<string> log,
+        HashSet<string> visited,
+        bool isRoot)
+    {
+        DirectoryInfo info;
+        try
+        {
+            info = new DirectoryInfo(folderPath);
+            if (!isRoot && info.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                log($"Пропущена ссылка: {info.FullName}");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            log($"Не удалось открыть папку {folderPath}: {ex.Message}");
+            return;
+        }
+
+        if (!visited.Add(info.FullName))
+            return;
+
+        folders.Add(info.FullName);
+
+        List<string> children;
+        try
+        {
+            children = Directory.EnumerateDirectories(info.FullName)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            log($"Не удалось просмотреть {info.FullName}: {ex.Message}");
+            return;
+        }
+
+        foreach (string child in children)
+            CollectFolders(child, folders, log, visited, isRoot: false);
+    }
+
+    private static ProcessingReport? ProcessFolder(string root, string folderPath, Action<string> log)
+    {
+        string display = DisplayPath(root, folderPath);
+        IReadOnlyList<string> audioFiles;
+        try
+        {
+            audioFiles = FindAudioFiles(folderPath);
+        }
+        catch (Exception ex)
+        {
+            log($"—— {display} ——");
+            log($"Не удалось прочитать папку: {ex.Message}");
+            return Report(CoverSource.None, null, 0, 0, 1, [$"{display}: {ex.Message}"]);
+        }
+
+        if (audioFiles.Count == 0)
+            return null;
+
+        log($"—— {display} ——");
+        log($"Аудиофайлов (MP3, FLAC, M4A): {audioFiles.Count}.");
 
         string? existingCoverPath = FindCoverFile(folderPath);
         byte[] jpeg;
@@ -47,63 +139,63 @@ public sealed class CoverProcessor
         {
             source = CoverSource.CoverFile;
             sourceFileName = CoverFileName;
-            Log("Источник обложки: файл cover.jpg.");
+            log("Источник обложки: файл cover.jpg.");
             try
             {
                 jpeg = ImageResizer.ToSquareJpeg(File.ReadAllBytes(existingCoverPath));
             }
             catch (Exception ex)
             {
-                Log($"Не удалось прочитать cover.jpg: {ex.Message}");
-                Log("Аудиофайлы не изменены.");
-                return Report(source, sourceFileName, audioFiles.Count, 0, 1, [$"cover.jpg: {ex.Message}"]);
+                log($"Не удалось прочитать cover.jpg: {ex.Message}");
+                log("Аудиофайлы не изменены.");
+                return Report(source, sourceFileName, audioFiles.Count, 0, 1, [$"{display}: cover.jpg: {ex.Message}"]);
             }
         }
         else
         {
-            Log("Файл cover.jpg не найден. Ищу встроенную обложку.");
-            byte[]? embedded = TryExtractFirstCover(audioFiles, Log, out string? trackName, out string? extractError);
+            log("Файл cover.jpg не найден. Ищу встроенную обложку.");
+            byte[]? embedded = TryExtractFirstCover(audioFiles, log, out string? trackName, out string? extractError);
             if (embedded is null)
             {
-                Log("Встроенная обложка не найдена. Аудиофайлы не изменены.");
+                log("Встроенная обложка не найдена. Аудиофайлы не изменены.");
                 return Report(
                     CoverSource.None,
                     null,
                     audioFiles.Count,
                     0,
                     extractError is null ? 0 : 1,
-                    extractError is null ? [] : [extractError]);
+                    extractError is null ? [] : [$"{display}: {extractError}"]);
             }
 
             source = CoverSource.EmbeddedTrack;
             sourceFileName = trackName;
-            Log($"Источник обложки: трек {trackName}.");
+            log($"Источник обложки: трек {trackName}.");
             try
             {
                 jpeg = ImageResizer.ToSquareJpeg(embedded);
             }
             catch (Exception ex)
             {
-                Log($"Не удалось обработать обложку из {trackName}: {ex.Message}");
-                Log("Аудиофайлы не изменены.");
-                return Report(source, sourceFileName, audioFiles.Count, 0, 1, [$"{trackName}: {ex.Message}"]);
+                log($"Не удалось обработать обложку из {trackName}: {ex.Message}");
+                log("Аудиофайлы не изменены.");
+                return Report(source, sourceFileName, audioFiles.Count, 0, 1, [$"{display}: {trackName}: {ex.Message}"]);
             }
         }
 
-        Log("Обложка подготовлена: 500×500, JPEG.");
+        log("Обложка подготовлена: 500×500, JPEG.");
 
         string coverPath = existingCoverPath ?? Path.Combine(folderPath, CoverFileName);
         try
         {
             SaveCoverFile(coverPath, jpeg);
-            Log(source == CoverSource.CoverFile
+            log(source == CoverSource.CoverFile
                 ? "Файл cover.jpg обновлён до 500×500, JPEG."
                 : "Файл cover.jpg сохранён в папку альбома.");
         }
         catch (Exception ex)
         {
-            errors.Add($"cover.jpg: {ex.Message}");
-            Log($"Не удалось записать cover.jpg: {ex.Message}");
+            errors.Add($"{display}: cover.jpg: {ex.Message}");
+            log($"Не удалось записать cover.jpg: {ex.Message}");
         }
 
         int processed = 0;
@@ -114,16 +206,16 @@ public sealed class CoverProcessor
             {
                 EmbedCover(audioPath, jpeg);
                 processed++;
-                Log($"Записано: {name}");
+                log($"Записано: {name}");
             }
             catch (Exception ex)
             {
-                errors.Add($"{name}: {ex.Message}");
-                Log($"Ошибка: {name}: {ex.Message}");
+                errors.Add($"{display}: {name}: {ex.Message}");
+                log($"Ошибка: {name}: {ex.Message}");
             }
         }
 
-        Log($"Готово. Обработано: {processed}, ошибок: {errors.Count}.");
+        log($"Готово. Обработано: {processed}, ошибок: {errors.Count}.");
         return Report(source, sourceFileName, audioFiles.Count, processed, errors.Count, errors);
     }
 
@@ -203,6 +295,12 @@ public sealed class CoverProcessor
             if (File.Exists(tempPath))
                 File.Delete(tempPath);
         }
+    }
+
+    private static string DisplayPath(string root, string folderPath)
+    {
+        string relative = Path.GetRelativePath(root, folderPath);
+        return relative == "." ? folderPath : relative;
     }
 
     private static IReadOnlyList<string> FindAudioFiles(string folderPath)

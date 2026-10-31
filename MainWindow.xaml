@@ -24,7 +24,7 @@
                 Text="Обложки альбомов"
                 Style="{StaticResource TitleTextBlockStyle}" />
             <TextBlock
-                Text="Выберите папку альбома. Приложение приведёт обложку к 500×500 и запишет её во все аудиофайлы."
+                Text="Выберите корневую папку. Каждая вложенная папка обрабатывается отдельно: обложка и треки берутся только из неё."
                 Style="{StaticResource BodyTextBlockStyle}"
                 Opacity="0.75"
                 TextWrapping="Wrap" />
