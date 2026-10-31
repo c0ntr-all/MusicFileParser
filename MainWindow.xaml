@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="MusicFileParser.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="Обработка обложек">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Spacing="4">
+            <TextBlock
+                Text="Обложки альбомов"
+                Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock
+                Text="Выберите папку альбома. Приложение приведёт обложку к 500×500 и запишет её во все аудиофайлы."
+                Style="{StaticResource BodyTextBlockStyle}"
+                Opacity="0.75"
+                TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Grid Grid.Row="1" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBox
+                x:Name="FolderPathBox"
+                IsReadOnly="True"
+                PlaceholderText="Папка не выбрана" />
+
+            <Button
+                x:Name="SelectFolderButton"
+                Grid.Column="1"
+                Content="Выбрать папку"
+                MinWidth="140" />
+
+            <Button
+                x:Name="ProcessButton"
+                Grid.Column="2"
+                Content="Обработать"
+                MinWidth="120"
+                Style="{StaticResource AccentButtonStyle}"
+                IsEnabled="False" />
+        </Grid>
+
+        <Grid Grid.Row="2" RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <TextBlock
+                Text="Журнал"
+                Style="{StaticResource SubtitleTextBlockStyle}" />
+
+            <Border
+                Grid.Row="1"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="4">
+                <ListView
+                    x:Name="LogList"
+                    SelectionMode="None"
+                    IsItemClickEnabled="False">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                            <TextBlock
+                                Text="{x:Bind}"
+                                FontFamily="Cascadia Mono, Consolas"
+                                FontSize="12"
+                                TextWrapping="Wrap" />
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

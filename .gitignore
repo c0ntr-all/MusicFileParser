@@ -1,0 +1,18 @@
+## Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.userprefs
+
+## Build results
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
