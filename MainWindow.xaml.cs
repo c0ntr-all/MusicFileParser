@@ -1,5 +1,6 @@
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using MusicFileParser.Models;
 using MusicFileParser.Services;
 using System;
 using System.Collections.ObjectModel;
@@ -13,13 +14,15 @@ namespace MusicFileParser;
 
 public sealed partial class MainWindow : Window
 {
-    private readonly ObservableCollection<string> _log = [];
+    private readonly ObservableCollection<LogSection> _sections = [];
+    private LogSection? _notes;
+    private LogSection? _folder;
     private bool _isProcessing;
 
     public MainWindow()
     {
         InitializeComponent();
-        LogList.ItemsSource = _log;
+        LogList.ItemsSource = _sections;
         PlaceWindow();
     }
 
@@ -74,9 +77,11 @@ public sealed partial class MainWindow : Window
         _isProcessing = true;
         SelectFolderButton.IsEnabled = false;
         ProcessButton.IsEnabled = false;
-        _log.Clear();
+        _sections.Clear();
+        _notes = null;
+        _folder = null;
 
-        var progress = new Progress<string>(AppendLog);
+        var progress = new Progress<LogEvent>(AppendLog);
 
         try
         {
@@ -84,7 +89,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AppendLog($"Сбой обработки: {ex.Message}");
+            AppendLog(new LogEvent(LogEventKind.Summary, $"Сбой обработки: {ex.Message}"));
         }
         finally
         {
@@ -94,17 +99,51 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void AppendLog(string message)
+    private void AppendLog(LogEvent entry)
     {
         if (DispatcherQueue.HasThreadAccess)
-            AddLog(message);
+            AddLog(entry);
         else
-            DispatcherQueue.TryEnqueue(() => AddLog(message));
+            DispatcherQueue.TryEnqueue(() => AddLog(entry));
     }
 
-    private void AddLog(string message)
+    private void AddLog(LogEvent entry)
     {
-        _log.Add(message);
-        LogList.ScrollIntoView(message);
+        switch (entry.Kind)
+        {
+            case LogEventKind.Folder:
+                _folder = AddSection(entry.Text, LogSectionKind.Folder);
+                break;
+            case LogEventKind.Summary:
+                LogSection summary = AddSection("Итог", LogSectionKind.Summary);
+                summary.Lines.Add(entry.Text);
+                _folder = null;
+                break;
+            case LogEventKind.Info:
+                _notes ??= AddSection("Обход", LogSectionKind.Notes);
+                _notes.Lines.Add(entry.Text);
+                Reveal();
+                return;
+            default:
+                LogSection target = _folder ?? (_notes ??= AddSection("Обход", LogSectionKind.Notes));
+                target.Lines.Add(entry.Text);
+                Reveal();
+                return;
+        }
+
+        Reveal();
+    }
+
+    private LogSection AddSection(string title, LogSectionKind kind)
+    {
+        var section = new LogSection(title, kind);
+        _sections.Add(section);
+        return section;
+    }
+
+    private void Reveal()
+    {
+        LogScroll.UpdateLayout();
+        LogScroll.ChangeView(null, LogScroll.ScrollableHeight, null, disableAnimation: true);
     }
 }

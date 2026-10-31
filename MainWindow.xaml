@@ -6,6 +6,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
+    xmlns:models="using:MusicFileParser.Models"
     Title="Обработка обложек">
 
     <Window.SystemBackdrop>
@@ -71,25 +72,68 @@
 
             <Border
                 Grid.Row="1"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                Background="{ThemeResource LayerFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="8"
                 Padding="4">
-                <ListView
-                    x:Name="LogList"
-                    SelectionMode="None"
-                    IsItemClickEnabled="False">
-                    <ListView.ItemTemplate>
-                        <DataTemplate x:DataType="x:String">
-                            <TextBlock
-                                Text="{x:Bind}"
-                                FontFamily="Cascadia Mono, Consolas"
-                                FontSize="12"
-                                TextWrapping="Wrap" />
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
+                <ScrollViewer
+                    x:Name="LogScroll"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="LogList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="models:LogSection">
+                                <Border
+                                    Margin="4,4,4,8"
+                                    CornerRadius="8"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                                    <Border
+                                        BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                                        BorderThickness="3,0,0,0"
+                                        CornerRadius="7">
+                                        <StackPanel>
+                                            <Border
+                                                Padding="12,8"
+                                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                BorderThickness="0,0,0,1"
+                                                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <FontIcon
+                                                        Glyph="{x:Bind Glyph}"
+                                                        FontSize="16"
+                                                        VerticalAlignment="Center" />
+                                                    <TextBlock
+                                                        Text="{x:Bind Title}"
+                                                        FontWeight="SemiBold"
+                                                        FontSize="14"
+                                                        VerticalAlignment="Center"
+                                                        TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
+                                            <ItemsControl
+                                                ItemsSource="{x:Bind Lines}"
+                                                Margin="12,8,12,10">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="x:String">
+                                                        <TextBlock
+                                                            Text="{x:Bind}"
+                                                            FontFamily="Cascadia Mono, Consolas"
+                                                            FontSize="12"
+                                                            TextWrapping="Wrap"
+                                                            Margin="0,1,0,1" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Border>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
             </Border>
         </Grid>
     </Grid>

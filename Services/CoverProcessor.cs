@@ -17,33 +17,35 @@ public sealed class CoverProcessor
         ".m4a"
     };
 
-    public ProcessingReport Process(string folderPath, IProgress<string>? progress = null)
+    public ProcessingReport Process(string folderPath, IProgress<LogEvent>? progress = null)
     {
-        void Log(string message) => progress?.Report(message);
+        void Report(LogEvent entry) => progress?.Report(entry);
+        void Info(string message) => Report(new LogEvent(LogEventKind.Info, message));
+        void Summary(string message) => Report(new LogEvent(LogEventKind.Summary, message));
 
         if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
         {
-            Log("Папка не найдена.");
+            Info("Папка не найдена.");
             return EmptyReport();
         }
 
         string root = Path.GetFullPath(folderPath);
-        Log($"Корень: {root}");
+        Info($"Корень: {root}");
 
         var folders = new List<string>();
-        CollectFolders(root, folders, Log, new HashSet<string>(StringComparer.OrdinalIgnoreCase), isRoot: true);
+        CollectFolders(root, folders, Info, new HashSet<string>(StringComparer.OrdinalIgnoreCase), isRoot: true);
 
         var reports = new List<ProcessingReport>();
         foreach (string folder in folders)
         {
-            ProcessingReport? report = ProcessFolder(root, folder, Log);
+            ProcessingReport? report = ProcessFolder(root, folder, Report);
             if (report is not null)
                 reports.Add(report);
         }
 
         if (reports.Count == 0)
         {
-            Log("В выбранной папке и подпапках нет файлов MP3, FLAC или M4A.");
+            Info("В выбранной папке и подпапках нет файлов MP3, FLAC или M4A.");
             return EmptyReport();
         }
 
@@ -52,7 +54,7 @@ public sealed class CoverProcessor
 
         int processed = reports.Sum(report => report.ProcessedCount);
         int failed = reports.Sum(report => report.FailedCount);
-        Log($"Итог. Папок: {reports.Count}, файлов записано: {processed}, ошибок: {failed}.");
+        Summary($"Папок: {reports.Count}, файлов записано: {processed}, ошибок: {failed}.");
         return new ProcessingReport
         {
             Source = CoverSource.None,
@@ -108,8 +110,10 @@ public sealed class CoverProcessor
             CollectFolders(child, folders, log, visited, isRoot: false);
     }
 
-    private static ProcessingReport? ProcessFolder(string root, string folderPath, Action<string> log)
+    private static ProcessingReport? ProcessFolder(string root, string folderPath, Action<LogEvent> log)
     {
+        void Line(string message) => log(new LogEvent(LogEventKind.Line, message));
+
         string display = DisplayPath(root, folderPath);
         IReadOnlyList<string> audioFiles;
         try
@@ -118,19 +122,19 @@ public sealed class CoverProcessor
         }
         catch (Exception ex)
         {
-            log($"—— {display} ——");
-            log($"Не удалось прочитать папку: {ex.Message}");
+            log(new LogEvent(LogEventKind.Folder, display));
+            Line($"Не удалось прочитать папку: {ex.Message}");
             return Report(CoverSource.None, null, 0, 0, 1, [$"{display}: {ex.Message}"]);
         }
 
         if (audioFiles.Count == 0)
             return null;
 
-        log($"—— {display} ——");
-        log($"Аудиофайлов (MP3, FLAC, M4A): {audioFiles.Count}.");
+        log(new LogEvent(LogEventKind.Folder, display));
+        Line($"Аудиофайлов (MP3, FLAC, M4A): {audioFiles.Count}.");
 
         string? existingCoverPath = FindCoverFile(folderPath);
-        byte[] jpeg;
+        PreparedCover cover;
         CoverSource source;
         string? sourceFileName;
         var errors = new List<string>();
@@ -139,25 +143,25 @@ public sealed class CoverProcessor
         {
             source = CoverSource.CoverFile;
             sourceFileName = CoverFileName;
-            log("Источник обложки: файл cover.jpg.");
+            Line("Источник обложки: файл cover.jpg.");
             try
             {
-                jpeg = ImageResizer.ToSquareJpeg(File.ReadAllBytes(existingCoverPath));
+                cover = ImageResizer.Prepare(File.ReadAllBytes(existingCoverPath), "image/jpeg");
             }
             catch (Exception ex)
             {
-                log($"Не удалось прочитать cover.jpg: {ex.Message}");
-                log("Аудиофайлы не изменены.");
+                Line($"Не удалось прочитать cover.jpg: {ex.Message}");
+                Line("Аудиофайлы не изменены.");
                 return Report(source, sourceFileName, audioFiles.Count, 0, 1, [$"{display}: cover.jpg: {ex.Message}"]);
             }
         }
         else
         {
-            log("Файл cover.jpg не найден. Ищу встроенную обложку.");
-            byte[]? embedded = TryExtractFirstCover(audioFiles, log, out string? trackName, out string? extractError);
+            Line("Файл cover.jpg не найден. Ищу встроенную обложку.");
+            EmbeddedPicture? embedded = TryExtractFirstCover(audioFiles, Line, out string? trackName, out string? extractError);
             if (embedded is null)
             {
-                log("Встроенная обложка не найдена. Аудиофайлы не изменены.");
+                Line("Встроенная обложка не найдена. Аудиофайлы не изменены.");
                 return Report(
                     CoverSource.None,
                     null,
@@ -169,33 +173,42 @@ public sealed class CoverProcessor
 
             source = CoverSource.EmbeddedTrack;
             sourceFileName = trackName;
-            log($"Источник обложки: трек {trackName}.");
+            Line($"Источник обложки: трек {trackName}.");
             try
             {
-                jpeg = ImageResizer.ToSquareJpeg(embedded);
+                cover = ImageResizer.Prepare(embedded.Value.Data, embedded.Value.MimeType);
             }
             catch (Exception ex)
             {
-                log($"Не удалось обработать обложку из {trackName}: {ex.Message}");
-                log("Аудиофайлы не изменены.");
+                Line($"Не удалось обработать обложку из {trackName}: {ex.Message}");
+                Line("Аудиофайлы не изменены.");
                 return Report(source, sourceFileName, audioFiles.Count, 0, 1, [$"{display}: {trackName}: {ex.Message}"]);
             }
         }
 
-        log("Обложка подготовлена: 500×500, JPEG.");
+        Line(Describe(cover));
 
-        string coverPath = existingCoverPath ?? Path.Combine(folderPath, CoverFileName);
-        try
+        if (cover.Adjustment == CoverAdjustment.Keep)
         {
-            SaveCoverFile(coverPath, jpeg);
-            log(source == CoverSource.CoverFile
-                ? "Файл cover.jpg обновлён до 500×500, JPEG."
-                : "Файл cover.jpg сохранён в папку альбома.");
+            Line(existingCoverPath is null
+                ? "Файл cover.jpg не создаётся."
+                : "Файл cover.jpg оставлен без изменений.");
         }
-        catch (Exception ex)
+        else
         {
-            errors.Add($"{display}: cover.jpg: {ex.Message}");
-            log($"Не удалось записать cover.jpg: {ex.Message}");
+            string coverPath = existingCoverPath ?? Path.Combine(folderPath, CoverFileName);
+            try
+            {
+                SaveCoverFile(coverPath, cover.Data);
+                Line(existingCoverPath is null
+                    ? $"Файл cover.jpg сохранён: {cover.Width}×{cover.Height}."
+                    : $"Файл cover.jpg обновлён: {cover.Width}×{cover.Height}.");
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{display}: cover.jpg: {ex.Message}");
+                Line($"Не удалось записать cover.jpg: {ex.Message}");
+            }
         }
 
         int processed = 0;
@@ -204,22 +217,47 @@ public sealed class CoverProcessor
             string name = Path.GetFileName(audioPath);
             try
             {
-                EmbedCover(audioPath, jpeg);
+                EmbedCover(audioPath, cover.Data, cover.MimeType);
                 processed++;
-                log($"Записано: {name}");
+                Line($"Записано: {name}");
             }
             catch (Exception ex)
             {
                 errors.Add($"{display}: {name}: {ex.Message}");
-                log($"Ошибка: {name}: {ex.Message}");
+                Line($"Ошибка: {name}: {ex.Message}");
             }
         }
 
-        log($"Готово. Обработано: {processed}, ошибок: {errors.Count}.");
+        Line($"Готово. Обработано: {processed}, ошибок: {errors.Count}.");
         return Report(source, sourceFileName, audioFiles.Count, processed, errors.Count, errors);
     }
 
-    private static byte[]? TryExtractFirstCover(
+    private static string Describe(PreparedCover cover)
+    {
+        int width = cover.SourceWidth;
+        int height = cover.SourceHeight;
+        int diff = Math.Abs(width - height);
+        return cover.Adjustment switch
+        {
+            CoverAdjustment.Keep when width == ImageResizer.TargetSize && height == ImageResizer.TargetSize
+                => "Обложка уже 500×500, размер не меняется.",
+            CoverAdjustment.Keep when width < ImageResizer.TargetSize && height < ImageResizer.TargetSize
+                => $"Обложка {width}×{height} меньше 500×500: размер не меняется.",
+            CoverAdjustment.Keep
+                => $"Обложка {width}×{height}: разница сторон {diff} px, пропорции и размер сохранены.",
+            CoverAdjustment.PadToSquare
+                => $"Обложка {width}×{height}: разница сторон {diff} px, размер доведён до 500×500.",
+            CoverAdjustment.CropToSquare
+                => $"Обложка {width}×{height} больше 500×500: приведена к 500×500.",
+            CoverAdjustment.ScaleProportionally
+                => $"Обложка {width}×{height}: разница сторон {diff} px, пропорции сохранены, размер {cover.Width}×{cover.Height}.",
+            _ => $"Обложка {cover.Width}×{cover.Height}."
+        };
+    }
+
+    private readonly record struct EmbeddedPicture(byte[] Data, string MimeType);
+
+    private static EmbeddedPicture? TryExtractFirstCover(
         IReadOnlyList<string> audioFiles,
         Action<string> log,
         out string? trackName,
@@ -234,7 +272,7 @@ public sealed class CoverProcessor
             string name = Path.GetFileName(audioPath);
             try
             {
-                byte[]? picture = ReadFrontCover(audioPath);
+                EmbeddedPicture? picture = ReadFrontCover(audioPath);
                 if (picture is null)
                     continue;
 
@@ -254,7 +292,7 @@ public sealed class CoverProcessor
         return null;
     }
 
-    private static byte[]? ReadFrontCover(string audioPath)
+    private static EmbeddedPicture? ReadFrontCover(string audioPath)
     {
         using TagLib.File file = TagLib.File.Create(audioPath);
         TagLib.IPicture? picture = file.Tag.Pictures
@@ -264,18 +302,19 @@ public sealed class CoverProcessor
         if (picture?.Data is not { Count: > 0 } data)
             return null;
 
-        return data.Data;
+        string mime = string.IsNullOrWhiteSpace(picture.MimeType) ? "image/jpeg" : picture.MimeType;
+        return new EmbeddedPicture(data.Data, mime);
     }
 
-    private static void EmbedCover(string audioPath, byte[] jpeg)
+    private static void EmbedCover(string audioPath, byte[] data, string mimeType)
     {
         using TagLib.File file = TagLib.File.Create(audioPath);
         file.Tag.Pictures =
         [
-            new TagLib.Picture(new TagLib.ByteVector(jpeg))
+            new TagLib.Picture(new TagLib.ByteVector(data))
             {
                 Type = TagLib.PictureType.FrontCover,
-                MimeType = "image/jpeg",
+                MimeType = mimeType,
                 Description = "Cover"
             }
         ];
