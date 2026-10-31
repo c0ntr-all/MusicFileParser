@@ -46,7 +46,8 @@
                 x:Name="SelectFolderButton"
                 Grid.Column="1"
                 Content="Выбрать папку"
-                MinWidth="140" />
+                MinWidth="140"
+                Click="SelectFolderButton_Click" />
 
             <Button
                 x:Name="ProcessButton"
@@ -54,7 +55,8 @@
                 Content="Обработать"
                 MinWidth="120"
                 Style="{StaticResource AccentButtonStyle}"
-                IsEnabled="False" />
+                IsEnabled="False"
+                Click="ProcessButton_Click" />
         </Grid>
 
         <Grid Grid.Row="2" RowSpacing="8">
