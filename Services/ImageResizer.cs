@@ -10,8 +10,6 @@ namespace MusicFileParser.Services;
 public enum CoverAdjustment
 {
     Keep,
-    PadToSquare,
-    CropToSquare,
     ScaleProportionally
 }
 
@@ -36,9 +34,6 @@ public static class ImageResizer
 {
     public const int TargetSize = 500;
 
-    // Разница сторон не больше 10 px считается почти квадратом и приводится к 500×500.
-    public const int ProportionTolerance = 10;
-
     private const long JpegQuality = 90L;
     private const int ExifOrientationId = 0x0112;
 
@@ -50,14 +45,7 @@ public static class ImageResizer
 
         int width = source.Width;
         int height = source.Height;
-        int diff = Math.Abs(width - height);
-        bool almostSquare = diff <= ProportionTolerance;
-        bool fits = width <= TargetSize && height <= TargetSize;
-        bool smallerThanTarget = width < TargetSize && height < TargetSize;
-
-        if ((width == TargetSize && height == TargetSize)
-            || (fits && !almostSquare)
-            || (fits && smallerThanTarget))
+        if (width <= TargetSize && height <= TargetSize)
         {
             return new PreparedCover
             {
@@ -71,20 +59,24 @@ public static class ImageResizer
             };
         }
 
-        if (fits)
-        {
-            using Bitmap padded = PadToSquare(source);
-            return Encoded(padded, width, height, CoverAdjustment.PadToSquare);
-        }
-
-        if (almostSquare)
-        {
-            using Bitmap cropped = CropCover(source);
-            return Encoded(cropped, width, height, CoverAdjustment.CropToSquare);
-        }
-
         using Bitmap scaled = ScaleToFit(source);
         return Encoded(scaled, width, height, CoverAdjustment.ScaleProportionally);
+    }
+
+    public static (int Width, int Height) Measure(byte[] imageBytes)
+    {
+        using var input = new MemoryStream(imageBytes);
+        using var source = Image.FromStream(input, useEmbeddedColorManagement: false, validateImageData: true);
+        NormalizeOrientation(source);
+        return (source.Width, source.Height);
+    }
+
+    public static byte[] ToJpeg(byte[] imageBytes)
+    {
+        using var input = new MemoryStream(imageBytes);
+        using var source = Image.FromStream(input, useEmbeddedColorManagement: false, validateImageData: true);
+        NormalizeOrientation(source);
+        return EncodeJpeg(source);
     }
 
     private static PreparedCover Encoded(
@@ -102,50 +94,6 @@ public static class ImageResizer
             Height = bitmap.Height,
             Adjustment = adjustment
         };
-
-    private static Bitmap CropCover(Image source)
-    {
-        double scale = Math.Max(TargetSize / (double)source.Width, TargetSize / (double)source.Height);
-        int scaledWidth = Math.Max(TargetSize, (int)Math.Round(source.Width * scale));
-        int scaledHeight = Math.Max(TargetSize, (int)Math.Round(source.Height * scale));
-
-        using var scaled = new Bitmap(scaledWidth, scaledHeight, PixelFormat.Format32bppArgb);
-        using (var graphics = Graphics.FromImage(scaled))
-        {
-            Prepare(graphics);
-            graphics.DrawImage(source, 0, 0, scaledWidth, scaledHeight);
-        }
-
-        int x = (scaled.Width - TargetSize) / 2;
-        int y = (scaled.Height - TargetSize) / 2;
-        var square = new Bitmap(TargetSize, TargetSize, PixelFormat.Format24bppRgb);
-        using (var graphics = Graphics.FromImage(square))
-        {
-            graphics.Clear(Color.Black);
-            graphics.DrawImage(
-                scaled,
-                new Rectangle(0, 0, TargetSize, TargetSize),
-                new Rectangle(x, y, TargetSize, TargetSize),
-                GraphicsUnit.Pixel);
-        }
-
-        return square;
-    }
-
-    private static Bitmap PadToSquare(Image source)
-    {
-        int width = Math.Clamp(source.Width, 1, TargetSize);
-        int height = Math.Clamp(source.Height, 1, TargetSize);
-
-        var canvas = new Bitmap(TargetSize, TargetSize, PixelFormat.Format24bppRgb);
-        using var graphics = Graphics.FromImage(canvas);
-        Prepare(graphics);
-        graphics.Clear(Color.Black);
-        int x = (TargetSize - width) / 2;
-        int y = (TargetSize - height) / 2;
-        graphics.DrawImage(source, x, y, width, height);
-        return canvas;
-    }
 
     private static Bitmap ScaleToFit(Image source)
     {

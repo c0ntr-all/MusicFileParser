@@ -4,6 +4,7 @@ using MusicFileParser.Models;
 using MusicFileParser.Services;
 using System;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Threading.Tasks;
 using Windows.Graphics;
 using Windows.Storage;
@@ -23,7 +24,15 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         LogList.ItemsSource = _sections;
+        SetWindowIcon();
         PlaceWindow();
+    }
+
+    private void SetWindowIcon()
+    {
+        string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico");
+        if (File.Exists(iconPath))
+            AppWindow.SetIcon(iconPath);
     }
 
     private void PlaceWindow()

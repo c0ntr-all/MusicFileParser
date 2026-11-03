@@ -133,31 +133,77 @@ public sealed class CoverProcessor
         log(new LogEvent(LogEventKind.Folder, display));
         Line($"Аудиофайлов (MP3, FLAC, M4A): {audioFiles.Count}.");
 
-        string? existingCoverPath = FindCoverFile(folderPath);
-        PreparedCover cover;
-        CoverSource source;
-        string? sourceFileName;
         var errors = new List<string>();
-
-        if (existingCoverPath is not null)
+        string? coverFilePath = FindImageFile(folderPath, CoverFileName);
+        if (coverFilePath is null && FindImageFile(folderPath, "folder.jpg") is string folderFilePath)
         {
-            source = CoverSource.CoverFile;
-            sourceFileName = CoverFileName;
-            Line("Источник обложки: файл cover.jpg.");
+            string renamedPath = Path.Combine(folderPath, CoverFileName);
             try
             {
-                cover = ImageResizer.Prepare(File.ReadAllBytes(existingCoverPath), "image/jpeg");
+                File.Move(folderFilePath, renamedPath);
+                coverFilePath = renamedPath;
+                Line($"Файл {Path.GetFileName(folderFilePath)} переименован в cover.jpg.");
             }
             catch (Exception ex)
             {
-                Line($"Не удалось прочитать cover.jpg: {ex.Message}");
+                errors.Add($"{display}: {Path.GetFileName(folderFilePath)}: {ex.Message}");
+                Line($"Не удалось переименовать {Path.GetFileName(folderFilePath)} в cover.jpg: {ex.Message}");
+                coverFilePath = folderFilePath;
+            }
+        }
+
+        PreparedCover cover;
+        CoverSource source;
+        string? sourceFileName;
+
+        if (coverFilePath is not null)
+        {
+            string imagePath = coverFilePath;
+            string imageName = Path.GetFileName(imagePath);
+            source = CoverSource.CoverFile;
+            sourceFileName = imageName;
+            Line($"Источник обложки: файл {imageName}.");
+            try
+            {
+                cover = ImageResizer.Prepare(File.ReadAllBytes(imagePath), "image/jpeg");
+            }
+            catch (Exception ex)
+            {
+                Line($"Не удалось прочитать {imageName}: {ex.Message}");
                 Line("Аудиофайлы не изменены.");
-                return Report(source, sourceFileName, audioFiles.Count, 0, 1, [$"{display}: cover.jpg: {ex.Message}"]);
+                return Report(source, sourceFileName, audioFiles.Count, 0, 1, [$"{display}: {imageName}: {ex.Message}"]);
+            }
+
+            Line(Describe(cover));
+            if (ExceedsTarget(cover))
+            {
+                Line($"Файл {imageName} оставлен без изменений. В треки вшивается копия {cover.Width}×{cover.Height}.");
+            }
+            else if (IsSmallerThanTarget(cover))
+            {
+                Line("Файл меньше 500×500. Ищу в треках более крупную обложку.");
+                if (TryFindLargerCover(audioFiles, cover, Line) is SizedPicture larger)
+                {
+                    if (TryAdoptLargerCover(folderPath, larger, Line, errors, display) is PreparedCover adopted)
+                    {
+                        cover = adopted;
+                        source = CoverSource.EmbeddedTrack;
+                        sourceFileName = larger.TrackName;
+                    }
+                }
+                else
+                {
+                    Line($"В треках нет обложки крупнее. Вшивается {imageName}.");
+                }
+            }
+            else
+            {
+                Line($"Файл {imageName} уже 500×500 и оставлен без изменений.");
             }
         }
         else
         {
-            Line("Файл cover.jpg не найден. Ищу встроенную обложку.");
+            Line("Файлы cover.jpg и Folder.jpg не найдены. Ищу встроенную обложку.");
             EmbeddedPicture? embedded = TryExtractFirstCover(audioFiles, Line, out string? trackName, out string? extractError);
             if (embedded is null)
             {
@@ -184,25 +230,14 @@ public sealed class CoverProcessor
                 Line("Аудиофайлы не изменены.");
                 return Report(source, sourceFileName, audioFiles.Count, 0, 1, [$"{display}: {trackName}: {ex.Message}"]);
             }
-        }
 
-        Line(Describe(cover));
-
-        if (cover.Adjustment == CoverAdjustment.Keep)
-        {
-            Line(existingCoverPath is null
-                ? "Файл cover.jpg не создаётся."
-                : "Файл cover.jpg оставлен без изменений.");
-        }
-        else
-        {
-            string coverPath = existingCoverPath ?? Path.Combine(folderPath, CoverFileName);
+            Line(Describe(cover));
             try
             {
-                SaveCoverFile(coverPath, cover.Data);
-                Line(existingCoverPath is null
-                    ? $"Файл cover.jpg сохранён: {cover.Width}×{cover.Height}."
-                    : $"Файл cover.jpg обновлён: {cover.Width}×{cover.Height}.");
+                SaveCoverFile(Path.Combine(folderPath, CoverFileName), CoverFileBytes(embedded.Value.Data, embedded.Value.MimeType));
+                Line(ExceedsTarget(cover)
+                    ? $"Файл cover.jpg сохранён в исходном размере {cover.SourceWidth}×{cover.SourceHeight}. В треки вшивается копия {cover.Width}×{cover.Height}."
+                    : $"Файл cover.jpg сохранён: {cover.Width}×{cover.Height}.");
             }
             catch (Exception ex)
             {
@@ -232,27 +267,108 @@ public sealed class CoverProcessor
         return Report(source, sourceFileName, audioFiles.Count, processed, errors.Count, errors);
     }
 
-    private static string Describe(PreparedCover cover)
+    private static string Describe(PreparedCover cover) =>
+        ExceedsTarget(cover)
+            ? $"Обложка {cover.SourceWidth}×{cover.SourceHeight} больше 500×500. Пропорции сохранены: {cover.Width}×{cover.Height}."
+            : $"Обложка {cover.SourceWidth}×{cover.SourceHeight} не больше 500×500, размер не меняется.";
+
+    private static bool ExceedsTarget(PreparedCover cover) =>
+        cover.SourceWidth > ImageResizer.TargetSize || cover.SourceHeight > ImageResizer.TargetSize;
+
+    private static bool IsSmallerThanTarget(PreparedCover cover) =>
+        !ExceedsTarget(cover)
+        && (cover.SourceWidth < ImageResizer.TargetSize || cover.SourceHeight < ImageResizer.TargetSize);
+
+    private readonly record struct SizedPicture(byte[] Data, string MimeType, int Width, int Height, string TrackName)
     {
-        int width = cover.SourceWidth;
-        int height = cover.SourceHeight;
-        int diff = Math.Abs(width - height);
-        return cover.Adjustment switch
+        public long Area => (long)Width * Height;
+    }
+
+    private static SizedPicture? TryFindLargerCover(
+        IReadOnlyList<string> audioFiles,
+        PreparedCover current,
+        Action<string> log)
+    {
+        long currentArea = (long)current.SourceWidth * current.SourceHeight;
+        SizedPicture? best = null;
+
+        foreach (string audioPath in audioFiles)
         {
-            CoverAdjustment.Keep when width == ImageResizer.TargetSize && height == ImageResizer.TargetSize
-                => "Обложка уже 500×500, размер не меняется.",
-            CoverAdjustment.Keep when width < ImageResizer.TargetSize && height < ImageResizer.TargetSize
-                => $"Обложка {width}×{height} меньше 500×500: размер не меняется.",
-            CoverAdjustment.Keep
-                => $"Обложка {width}×{height}: разница сторон {diff} px, пропорции и размер сохранены.",
-            CoverAdjustment.PadToSquare
-                => $"Обложка {width}×{height}: разница сторон {diff} px, размер доведён до 500×500.",
-            CoverAdjustment.CropToSquare
-                => $"Обложка {width}×{height} больше 500×500: приведена к 500×500.",
-            CoverAdjustment.ScaleProportionally
-                => $"Обложка {width}×{height}: разница сторон {diff} px, пропорции сохранены, размер {cover.Width}×{cover.Height}.",
-            _ => $"Обложка {cover.Width}×{cover.Height}."
-        };
+            string name = Path.GetFileName(audioPath);
+            try
+            {
+                EmbeddedPicture? picture = ReadFrontCover(audioPath);
+                if (picture is null)
+                    continue;
+
+                (int width, int height) = ImageResizer.Measure(picture.Value.Data);
+                long area = (long)width * height;
+                if (area <= currentArea)
+                    continue;
+
+                if (best is null || area > best.Value.Area)
+                    best = new SizedPicture(picture.Value.Data, picture.Value.MimeType, width, height, name);
+            }
+            catch (Exception ex)
+            {
+                log($"Не удалось прочитать {name}: {ex.Message}");
+            }
+        }
+
+        return best;
+    }
+
+    private static PreparedCover? TryAdoptLargerCover(
+        string folderPath,
+        SizedPicture picture,
+        Action<string> log,
+        List<string> errors,
+        string display)
+    {
+        log($"Найдена более крупная обложка в {picture.TrackName}: {picture.Width}×{picture.Height}.");
+        PreparedCover prepared;
+        try
+        {
+            prepared = ImageResizer.Prepare(picture.Data, picture.MimeType);
+        }
+        catch (Exception ex)
+        {
+            log($"Не удалось обработать обложку из {picture.TrackName}: {ex.Message}");
+            log("Остаётся обложка из файла папки.");
+            return null;
+        }
+
+        try
+        {
+            SaveCoverFile(Path.Combine(folderPath, CoverFileName), CoverFileBytes(picture.Data, picture.MimeType));
+            log(ExceedsTarget(prepared)
+                ? $"Файл cover.jpg сохранён в исходном размере {prepared.SourceWidth}×{prepared.SourceHeight}. В треки вшивается копия {prepared.Width}×{prepared.Height}."
+                : $"Файл cover.jpg сохранён: {prepared.Width}×{prepared.Height}.");
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"{display}: cover.jpg: {ex.Message}");
+            log($"Не удалось записать cover.jpg: {ex.Message}");
+        }
+
+        return prepared;
+    }
+
+    private static byte[] CoverFileBytes(byte[] data, string mimeType)
+    {
+        if (IsJpeg(data, mimeType))
+            return data;
+
+        return ImageResizer.ToJpeg(data);
+    }
+
+    private static bool IsJpeg(byte[] data, string mimeType)
+    {
+        if (mimeType.Contains("jpeg", StringComparison.OrdinalIgnoreCase)
+            || mimeType.Contains("jpg", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF;
     }
 
     private readonly record struct EmbeddedPicture(byte[] Data, string MimeType);
@@ -350,12 +466,12 @@ public sealed class CoverProcessor
             .ToList();
     }
 
-    private static string? FindCoverFile(string folderPath)
+    private static string? FindImageFile(string folderPath, string fileName)
     {
         return Directory.EnumerateFiles(folderPath)
             .FirstOrDefault(path => string.Equals(
                 Path.GetFileName(path),
-                CoverFileName,
+                fileName,
                 StringComparison.OrdinalIgnoreCase));
     }
 
